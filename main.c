@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 #include <time.h>
 
 #include <sys/types.h>
@@ -52,7 +53,7 @@ int main(int argc, char **argv) {
   memset(&hints, 0, sizeof(struct addrinfo));
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_DGRAM;
-  hints.ai_flags = 0;
+  hints.ai_flags = AI_CANONNAME;
   hints.ai_protocol = IPPROTO_UDP;
 
   struct addrinfo *result, *rp;
@@ -73,8 +74,20 @@ int main(int argc, char **argv) {
       setsockopt(sfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
       setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
-      if (rp->ai_canonname != NULL) {
+      if (rp == result && rp->ai_canonname != NULL) {
         host = strdup(rp->ai_canonname);
+
+        // http://tools.ietf.org/html/draft-vixie-dnsext-dns0x20-00
+        for (char *s = host; *s; ++s) *s = tolower(*s);
+
+        // sanity check canonical name to prevent metric injection
+        char c; int i = 0;
+        while ((c = host[i++]) != '\0') {
+          if (! (isalnum(c) || c == '.' || c == '-')) {
+            fprintf(stderr, "got strange canonical name: %s\n", host);
+            return 1;
+          }
+        }
       }
 
       break;
