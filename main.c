@@ -30,6 +30,26 @@ struct mumble_resp {
 } __attribute__((__packed__));
 
 
+// https://ftp.gnu.org/old-gnu/Manuals/glibc-2.2.5/html_node/Elapsed-Time.html
+int timespec_subtract (struct timespec *result, struct timespec *x, struct timespec *y) {
+  if (x->tv_nsec < y->tv_nsec) {
+    int nsec = (y->tv_nsec - x->tv_nsec) / 1000000000 + 1;
+    y->tv_nsec -= 1000000000 * nsec;
+    y->tv_sec += nsec;
+  }
+
+  if (x->tv_nsec - y->tv_nsec > 1000000000) {
+    int nsec = (x->tv_nsec - y->tv_nsec) / 1000000000;
+    y->tv_nsec += 1000000000 * nsec;
+    y->tv_sec -= nsec;
+  }
+
+  result->tv_sec = x->tv_sec - y->tv_sec;
+  result->tv_nsec = x->tv_nsec - y->tv_nsec;
+
+  return x->tv_sec < y->tv_sec;
+}
+
 int main(int argc, char **argv) {
 
   char *host;
@@ -99,10 +119,11 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  struct timespec rawtime;
-  clock_gettime(0, &rawtime);
+  struct timespec pretime, posttime, walltime;
+  clock_gettime(CLOCK_REALTIME, &walltime);
+  clock_gettime(CLOCK_MONOTONIC, &pretime);
 
-  struct mumble_req req = { 0, rawtime.tv_sec };
+  struct mumble_req req = { 0, pretime.tv_sec };
   ssize_t nsent = sendto(sfd, &req, sizeof(req), 0, rp->ai_addr, rp->ai_addrlen);
   switch (nsent) {
     case -1:
@@ -130,16 +151,28 @@ int main(int argc, char **argv) {
       return 1;
   }
 
+  clock_gettime(CLOCK_MONOTONIC, &posttime);
+
   if (close(sfd) == -1) {
       perror("closing socket");
       return 1;
   }
 
+  struct timespec rtt;
+  timespec_subtract(&rtt, &posttime, &pretime);
+  long latency_ms = (rtt.tv_sec * 1000 + rtt.tv_nsec / 1000000) / 2;
+
+  // estimate server time as .5 RTT
+  walltime.tv_sec  += latency_ms / 1000;
+  walltime.tv_nsec += (latency_ms % 1000) * 1000000;
+
   // https://docs.influxdata.com/influxdb/v2.0/reference/syntax/line-protocol/
-  printf("mumble,host=%s,port=%s,version=%x.%x.%x users=%uu,max=%uu,bandwidth=%u %ld%09ld\n",
+  printf("mumble,server=%s,port=%s,version=%x.%x.%x"
+         " users=%uu,users_max=%uu,bandwidth=%uu,latency=%ldu"
+         " %ld%09ld\n",
       host, port, resp.version[1], resp.version[2], resp.version[3],
       htonl(resp.users_curr), htonl(resp.users_max), htonl(resp.bandwidth),
-      rawtime.tv_sec, rawtime.tv_nsec);
+      latency_ms, walltime.tv_sec, walltime.tv_nsec);
 
   return 0;
 }
