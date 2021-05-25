@@ -11,4 +11,4 @@ project(
 add_project_arguments('-Wno-unused-parameter', language: 'c')
 add_project_arguments('-Wno-missing-braces', language: 'c')
 
-executable ('mumble-ping', 'main.c')
+executable ('mumble-ping', 'main.c', install: true)
