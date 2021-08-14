@@ -14,6 +14,14 @@
 #include <sys/time.h>
 #include <netdb.h>
 
+#define DEFAULT_MUMBLE_PORT "64738"
+
+#define FORMAT_DEFAULT 0u
+#define FORMAT_INFLUX 1u
+#define FORMAT_JSON 2u
+
+#define USAGE fprintf(stderr, "usage: %s [--json|--influx] HOST [PORT]\n", argv[0])
+
 // https://wiki.mumble.info/wiki/Protocol
 
 struct mumble_req {
@@ -54,19 +62,47 @@ int main(int argc, char **argv) {
 
   char *host;
   char *port;
+  uint8_t format = FORMAT_DEFAULT;
 
   switch (argc) {
     case 2:
       host = argv[1];
-      port = "64738"; // default mumble port
+      port = DEFAULT_MUMBLE_PORT;
       break;
     case 3:
-      host = argv[1];
-      port = argv[2];
+      if (!strcmp(argv[1], "--json")) {
+        format = FORMAT_JSON;
+      } else if (!strcmp(argv[1], "--influx")) {
+        format = FORMAT_INFLUX;
+      }
+      if (format != FORMAT_DEFAULT) {
+        host = argv[2];
+        port = DEFAULT_MUMBLE_PORT;
+      } else {
+        host = argv[1];
+        port = argv[2];
+      }
       break;
+    case 4:
+      host = argv[2];
+      port = argv[3];
+      if (!strcmp(argv[1], "--json")) {
+        format = FORMAT_JSON;
+        break;
+      } else if (!strcmp(argv[1], "--influx")) {
+        format = FORMAT_INFLUX;
+        break;
+      }
+      __attribute__((fallthrough));
     default:
-      fprintf(stderr, "usage: %s HOST [PORT]\n", argv[0]);
+      USAGE;
       return 1;
+  }
+
+  if (host[0] == '\0' || host[0] == '-' \
+      || port[0] == '\0' || port[0] == '-') {
+    USAGE;
+    return 1;
   }
 
   struct addrinfo hints;
@@ -166,13 +202,26 @@ int main(int argc, char **argv) {
   walltime.tv_sec  += latency_ms / 1000;
   walltime.tv_nsec += (latency_ms % 1000) * 1000000;
 
-  // https://docs.influxdata.com/influxdb/v2.0/reference/syntax/line-protocol/
-  printf("mumble,server=%s,port=%s,version=%x.%x.%x"
-         " users=%uu,users_max=%uu,bandwidth=%uu,latency=%ldu"
-         " %ld%09ld\n",
-      host, port, resp.version[1], resp.version[2], resp.version[3],
-      htonl(resp.users_curr), htonl(resp.users_max), htonl(resp.bandwidth),
-      latency_ms, walltime.tv_sec, walltime.tv_nsec);
+  switch (format) {
+    case FORMAT_JSON:
+      printf("{\"server\":\"%s\",\"port\":%s,\"version\":\"%x.%x.%x\","
+            "\"users\":%u,\"users_max\":%u,\"bandwidth\":%u,\"latency\":%ld,"
+            "\"timestamp\":%ld%09ld}\n",
+          host, port, resp.version[1], resp.version[2], resp.version[3],
+          htonl(resp.users_curr), htonl(resp.users_max), htonl(resp.bandwidth),
+          latency_ms, walltime.tv_sec, walltime.tv_nsec);
+
+      break;
+    case FORMAT_INFLUX:
+    case FORMAT_DEFAULT:
+      // https://docs.influxdata.com/influxdb/v2.0/reference/syntax/line-protocol/
+      printf("mumble,server=%s,port=%s,version=%x.%x.%x"
+            " users=%uu,users_max=%uu,bandwidth=%uu,latency=%ldu"
+            " %ld%09ld\n",
+          host, port, resp.version[1], resp.version[2], resp.version[3],
+          htonl(resp.users_curr), htonl(resp.users_max), htonl(resp.bandwidth),
+          latency_ms, walltime.tv_sec, walltime.tv_nsec);
+  }
 
   return 0;
 }
